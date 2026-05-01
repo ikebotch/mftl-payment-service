@@ -21,6 +21,19 @@ public class MoolreProvider : IMoolreProvider
         _settings = options;
         _logger = logger;
 
+        var settings = _settings.Value;
+        if (string.Equals(settings.Mode, "Real", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(settings.BaseUrl))
+                throw new InvalidOperationException("Real Moolre requires a valid BaseUrl.");
+            if (string.IsNullOrWhiteSpace(settings.ApiKey) || string.IsNullOrWhiteSpace(settings.ApiUser))
+                throw new InvalidOperationException("Real Moolre requires valid credentials (ApiKey and ApiUser).");
+            if (string.IsNullOrWhiteSpace(settings.CallbackUrl))
+                throw new InvalidOperationException("Real Moolre requires a public callback URL.");
+            if (settings.CallbackUrl.Contains("localhost") || settings.CallbackUrl.Contains("127.0.0.1"))
+                throw new InvalidOperationException("Real Moolre requires a public callback URL, not localhost.");
+        }
+
         // configure rest client
         _restClient = new RestClient(_settings.Value.BaseUrl);
         _restClient.AddDefaultHeader("X-Api-Key", _settings.Value.ApiKey);
@@ -32,8 +45,7 @@ public class MoolreProvider : IMoolreProvider
     {
         try
         {
-            // create a request
-            var request = new RestRequest("/open/transact/topup");
+            var isReal = string.Equals(_settings.Value.Mode, "Real", StringComparison.OrdinalIgnoreCase);
 
             // create 
             var payload = new MoolreInitiateCollectionRequestDto
@@ -46,28 +58,71 @@ public class MoolreProvider : IMoolreProvider
                 Reference = body.UserReference,
                 Type = 1,
                 AccountNumber = _settings.Value.PaymentAccountNumber,
-                Username = _settings.Value.ApiUser
+                Username = _settings.Value.ApiUser,
+                CallbackUrl = _settings.Value.CallbackUrl
             };
-            request.AddJsonBody(payload);
 
             // log request
-            _logger.LogInformation($"InitiateCollection Request Payload: {JsonConvert.SerializeObject(payload)}");
+            _logger.LogInformation("InitiateCollection Request: Mode={Mode}, Url={Url}, ExternalReference={ExtReference}, ContributionId={ContributionId}, Amount={Amount} {Currency}, CallbackUrl={CallbackUrl}",
+                _settings.Value.Mode, _settings.Value.BaseUrl, payload.ExtReference, payload.Reference, payload.Amount, payload.Currency, payload.CallbackUrl);
 
-            _logger.LogInformation("MOCK: Skipping actual Moolre call and returning success.");
+            if (!isReal)
+            {
+                _logger.LogInformation("MOCK: Skipping actual Moolre call and returning success.");
+
+                return new ServiceResponseModel<InitiateCollectionResponseDto>
+                {
+                    Status = "success",
+                    Message = "Initiate collection was successful (MOCKED)",
+                    Data = new InitiateCollectionResponseDto
+                    {
+                        Reference = $"MOCK-{Guid.NewGuid():N}"
+                    }
+                };
+            }
+
+            // create a request
+            var request = new RestRequest("/open/transact/topup");
+            request.AddJsonBody(payload);
+
+            // make request
+            var response = await _restClient.PostAsync<MoolreServiceResponse>(request);
+
+            if (response is null)
+            {
+                _logger.LogWarning("Moolre Initiation returned null response.");
+                return new ServiceResponseModel<InitiateCollectionResponseDto>
+                {
+                    Status = "failed",
+                    Message = "No response from Moolre"
+                };
+            }
+
+            _logger.LogInformation("Moolre Initiation Response: Status={Status}, Code={Code}, Message={Message}, Reference={Reference}",
+                response.Status, response.Code, response.Message, response.Reference);
+
+            if (response.Status != 1)
+            {
+                return new ServiceResponseModel<InitiateCollectionResponseDto>
+                {
+                    Status = "failed",
+                    Message = response.Message
+                };
+            }
 
             return new ServiceResponseModel<InitiateCollectionResponseDto>
             {
                 Status = "success",
-                Message = "Initiate collection was successful (MOCKED)",
+                Message = "Initiate collection was successful",
                 Data = new InitiateCollectionResponseDto
                 {
-                    Reference = $"MOCK-{Guid.NewGuid():N}"
+                    Reference = response.Reference ?? response.Data ?? string.Empty
                 }
             };
         }
         catch (Exception e)
         {
-            _logger.LogError($"Something went wrong: {e.Message}", e);
+            _logger.LogError($"Something went wrong during Moolre initiation: {e.Message}", e);
 
             return new ServiceResponseModel<InitiateCollectionResponseDto>
             {

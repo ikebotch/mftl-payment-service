@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Moq;
 using MftlPaymentService.Data.Entities;
 using MftlPaymentService.Infrastructure.Callbacks;
 using MftlPaymentService.Tests.TestSupport;
@@ -6,6 +8,8 @@ namespace MftlPaymentService.Tests;
 
 public sealed class ClientCallbackDispatcherTests
 {
+    private readonly Mock<ILogger<ClientCallbackDispatcher>> _loggerMock = new();
+
     [Fact]
     public async Task DispatchAsync_adds_signature_headers()
     {
@@ -16,7 +20,7 @@ public sealed class ClientCallbackDispatcherTests
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
         });
 
-        var dispatcher = new ClientCallbackDispatcher(client);
+        var dispatcher = new ClientCallbackDispatcher(client, _loggerMock.Object);
         await dispatcher.DispatchAsync(new ClientCallbackDelivery
         {
             CallbackUrl = "https://client.test/payments/callback",

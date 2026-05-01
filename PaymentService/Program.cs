@@ -91,6 +91,10 @@ using (var scope = app.Services.CreateScope())
     var options = scope.ServiceProvider.GetRequiredService<IOptions<ClientCallbackOptions>>().Value;
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     logger.LogInformation("Internal Authentication Configured. Allowed Clients: {Clients}", string.Join(", ", options.Apps.Keys));
+
+    var moolreOptions = scope.ServiceProvider.GetRequiredService<IOptions<MoolreSettings>>().Value;
+    logger.LogInformation("Moolre Configuration: Mode={Mode}, BaseUrl={Url}, CallbackUrl={CallbackUrl}, CredentialsPresent={Creds}", 
+        moolreOptions.Mode, moolreOptions.BaseUrl, moolreOptions.CallbackUrl, !string.IsNullOrEmpty(moolreOptions.ApiKey));
 }
 
 app.UseCors("AllowAll");

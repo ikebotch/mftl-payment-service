@@ -13,4 +13,5 @@ public class MoolreInitiateCollectionRequestDto
     [JsonPropertyName("type")] public int Type { get; set; }
     [JsonPropertyName("accountnumber")] public string AccountNumber { get; set; }
     [JsonPropertyName("username")] public string Username { get; set; }
+    [JsonPropertyName("callbackurl")] public string CallbackUrl { get; set; }
 }
