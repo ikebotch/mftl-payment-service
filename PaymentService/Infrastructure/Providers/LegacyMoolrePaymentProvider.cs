@@ -12,17 +12,8 @@ public sealed class LegacyMoolrePaymentProvider(IMoolreProvider provider) : IPay
 
     public async Task<CreatePaymentResult> CreatePaymentAsync(CreateProviderPaymentRequest request, CancellationToken ct)
     {
-        var metadata = request.Metadata.ValueKind == JsonValueKind.Object ? request.Metadata.Value : default;
-        var network = "moolre";
-        var phoneNumber = request.CustomerPhone ?? string.Empty;
-
-        if (metadata.ValueKind == JsonValueKind.Object)
-        {
-            if (metadata.TryGetProperty("momoNetwork", out var n) && n.ValueKind == JsonValueKind.String)
-                network = n.GetString() ?? network;
-            if (metadata.TryGetProperty("momoPhoneNumber", out var p) && p.ValueKind == JsonValueKind.String)
-                phoneNumber = p.GetString() ?? phoneNumber;
-        }
+        var network = GetMetadataString(request.Metadata, "momoNetwork") ?? "moolre";
+        var phoneNumber = GetMetadataString(request.Metadata, "momoPhoneNumber") ?? request.CustomerPhone ?? string.Empty;
 
         var response = await provider.InitiateCollection(new InitiateCollectionRequestDto
         {
@@ -66,7 +57,13 @@ public sealed class LegacyMoolrePaymentProvider(IMoolreProvider provider) : IPay
     {
         var (rawBody, payload) = await WebhookHelpers.ReadBodyAsync(request, ct);
         var data = payload.TryGetProperty("data", out var parsedData) ? parsedData : payload;
-        var txStatus = WebhookHelpers.ReadString(data, "TxStatus");
+        
+        var txStatus = WebhookHelpers.ReadString(data, "TxStatus") ?? WebhookHelpers.ReadString(data, "txstatus");
+        var providerCode = WebhookHelpers.ReadString(payload, "Code") ?? WebhookHelpers.ReadString(payload, "code");
+        
+        var status = (txStatus == "1" || string.Equals(providerCode, "P01", StringComparison.OrdinalIgnoreCase))
+            ? PaymentStatus.Succeeded
+            : (txStatus == "2" ? PaymentStatus.Failed : PaymentStatus.Pending);
 
         return new WebhookParseResult
         {
@@ -75,12 +72,9 @@ public sealed class LegacyMoolrePaymentProvider(IMoolreProvider provider) : IPay
             EventType = "moolre.transaction",
             ProviderReference = WebhookHelpers.ReadString(data, "ExternalRef") ?? WebhookHelpers.ReadString(data, "ThirdPartyRef"),
             ProviderTransactionId = WebhookHelpers.ReadString(data, "TransactionId"),
-            Status = txStatus switch
-            {
-                "1" => PaymentStatus.Succeeded,
-                "2" => PaymentStatus.Failed,
-                _ => PaymentStatus.Pending
-            },
+            Amount = WebhookHelpers.ReadDecimal(data, "Amount") ?? WebhookHelpers.ReadDecimal(data, "value"),
+            Currency = WebhookHelpers.ReadString(data, "Currency"),
+            Status = status,
             PayloadHash = WebhookHelpers.ComputeSha256(rawBody),
             Payload = payload
         };
@@ -93,4 +87,19 @@ public sealed class LegacyMoolrePaymentProvider(IMoolreProvider provider) : IPay
             Status = PaymentStatus.Failed,
             FailureReason = "TODO: Moolre refund support is not implemented."
         });
+
+    private static string? GetMetadataString(JsonElement metadata, string key)
+    {
+        if (metadata.ValueKind != JsonValueKind.Object || !metadata.TryGetProperty(key, out var value) || value.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => value.ToString(),
+            _ => value.ToString()
+        };
+    }
 }

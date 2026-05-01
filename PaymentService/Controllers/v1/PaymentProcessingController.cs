@@ -3,15 +3,19 @@ using MftlPaymentService.Contracts.Payments;
 using MftlPaymentService.Domain;
 using MftlPaymentService.Services;
 
+using MftlPaymentService.Filters;
+
 namespace MftlPaymentService.Controllers.v1;
 
 [ApiController]
 [Route("api/v1")]
-public sealed class PaymentProcessingController(IPaymentOrchestrator orchestrator) : ControllerBase
+[InternalAuth]
+public sealed class PaymentProcessingController(IPaymentOrchestrator orchestrator, ILogger<PaymentProcessingController> logger) : ControllerBase
 {
     [HttpPost("payments")]
     public async Task<ActionResult<CreatePaymentResponseDto>> CreatePayment([FromBody] CreatePaymentRequestDto request, CancellationToken ct)
     {
+        logger.LogInformation("Processing internal payment initiation for ClientApp={ClientApp} Reference={ExternalReference}", request.ClientApp, request.ExternalReference);
         try
         {
             return Ok(await orchestrator.CreatePaymentAsync(request, ct));

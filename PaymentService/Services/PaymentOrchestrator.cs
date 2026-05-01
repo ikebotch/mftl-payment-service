@@ -187,9 +187,30 @@ public sealed class PaymentOrchestrator(
         processedEvent.PaymentRecordId = payment.Id;
         var previousStatus = payment.Status;
         var statusChanged = false;
+
         if (webhook.Status is not null)
         {
+            if (webhook.Amount.HasValue && Math.Abs(webhook.Amount.Value - payment.Amount) > 0.01m)
+            {
+                logger.LogWarning("Webhook amount mismatch for payment {PaymentId}. Expected {Expected}, Got {Got}.", payment.Id, payment.Amount, webhook.Amount.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(webhook.Currency) && !string.Equals(webhook.Currency, payment.Currency, StringComparison.OrdinalIgnoreCase))
+            {
+                logger.LogWarning("Webhook currency mismatch for payment {PaymentId}. Expected {Expected}, Got {Got}.", payment.Id, payment.Currency, webhook.Currency);
+            }
+
             statusChanged = ApplyStatusTransition(payment, webhook.Status.Value, webhook.FailureReason);
+            
+            if (!string.IsNullOrWhiteSpace(webhook.ProviderTransactionId))
+            {
+                payment.ProviderTransactionId = webhook.ProviderTransactionId;
+            }
+
+            if (IsTerminalCallbackStatus(payment.Status) && payment.CompletedAt == null)
+            {
+                payment.CompletedAt = DateTimeOffset.UtcNow;
+            }
         }
 
         processedEvent.Status = WebhookProcessingStatus.Processed;
@@ -235,7 +256,11 @@ public sealed class PaymentOrchestrator(
                 PaymentRecordId = payment.Id,
                 EventType = eventType,
                 CallbackUrl = callbackUrl,
-                PayloadJson = JsonSerializer.Serialize(BuildCallbackPayload(payment), JsonSerializerOptions.Web),
+                PayloadJson = JsonSerializer.Serialize(BuildCallbackPayload(payment), new JsonSerializerOptions 
+                { 
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } 
+                }),
                 Status = ClientCallbackStatus.Pending,
                 CreatedAt = DateTimeOffset.UtcNow
             };

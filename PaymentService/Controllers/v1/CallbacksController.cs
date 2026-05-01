@@ -2,9 +2,11 @@ using System.Globalization;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
+using MftlPaymentService.Domain;
 using MftlPaymentService.Dtos.v1.Request.Moolre;
 using MftlPaymentService.Dtos.v1.Request.Payments;
 using MftlPaymentService.Interfaces.v1;
+using MftlPaymentService.Services;
 using MftlPaymentService.Settings;
 
 namespace MftlPaymentService.Controllers.v1;
@@ -17,36 +19,60 @@ public sealed class CallbacksController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly PaymentWebhookSettings _webhookSettings;
     private readonly IPaymentJourneyService _paymentJourneyService;
+    private readonly IPaymentOrchestrator _orchestrator;
     private readonly IActivityLogService _activityLogService;
 
     public CallbacksController(
         ILogger<CallbacksController> logger,
         IHttpClientFactory httpClientFactory,
         IPaymentJourneyService paymentJourneyService,
+        IPaymentOrchestrator orchestrator,
         IActivityLogService activityLogService,
         IOptions<PaymentWebhookSettings> webhookOptions)
     {
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _paymentJourneyService = paymentJourneyService;
+        _orchestrator = orchestrator;
         _activityLogService = activityLogService;
         _webhookSettings = webhookOptions.Value;
     }
 
     [HttpPost("moolre")]
-    public async Task<IActionResult> Moolre([FromBody] MoolreTransactionWebhookRequestDto body)
+    public async Task<IActionResult> Moolre(CancellationToken ct)
     {
-        await SafeLog("callback.moolre.transaction", "received", "pending", request: body, provider: "moolre", reference: body.Data?.ExternalRef ?? body.Data?.ThirdPartyRef ?? body.Data?.TransactionId);
-        if (body.Data is null)
-            return BadRequest(new { message = "data is required" });
-
-        var now = DateTimeOffset.UtcNow;
-        var localState = body.Data.TxStatus switch
+        _logger.LogInformation("Received Moolre callback on legacy route.");
+        
+        // Use the unified orchestrator first (handles PaymentRecord entities used by Collections)
+        var outcome = await _orchestrator.ProcessWebhookAsync(PaymentProviderType.Moolre, Request, ct);
+        
+        if (outcome.Accepted)
         {
-            1 => "completed",
-            2 => "failed",
-            _ => "pending"
-        };
+            if (outcome.Payment != null)
+            {
+                return Ok(new { status = "received", paymentId = outcome.Payment.Id });
+            }
+            
+            // If accepted but no payment found, it might be a legacy application payment
+            // We'll fall back to the old logic if needed, but the orchestrator now tracks unmatched events too.
+            if (outcome.Message == "No matching payment found for webhook.")
+            {
+                _logger.LogWarning("Moolre callback matched no PaymentRecord. Attempting legacy ApplicationPayment resolution.");
+            }
+            else
+            {
+                return Ok(new { status = "received", message = outcome.Message });
+            }
+        }
+
+        // Fallback to legacy ApplicationPayment logic
+        // We need to re-read the body because ProcessWebhookAsync consumed it (but WebhookHelpers enables buffering)
+        Request.Body.Position = 0;
+        var body = await Request.ReadFromJsonAsync<MoolreTransactionWebhookRequestDto>(cancellationToken: ct);
+        if (body?.Data == null)
+            return Ok(new { status = "received" }); // Safe acknowledgement even if malformed
+
+        await SafeLog("callback.moolre.transaction", "received", "pending", request: body, provider: "moolre", reference: body.Data?.ExternalRef ?? body.Data?.ThirdPartyRef ?? body.Data?.TransactionId);
 
         var outboundStatus = body.Data.TxStatus switch
         {
@@ -55,14 +81,7 @@ public sealed class CallbacksController : ControllerBase
             _ => "pending"
         };
 
-        decimal amount = 0m;
-        if (!string.IsNullOrWhiteSpace(body.Data.Amount))
-            decimal.TryParse(body.Data.Amount, NumberStyles.Number, CultureInfo.InvariantCulture, out amount);
-
         var paymentId = (body.Data.ExternalRef ?? body.Data.ThirdPartyRef ?? body.Data.TransactionId ?? string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(paymentId))
-            paymentId = $"MOOLRE-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
-
         var id = ResolveId(body, paymentId);
 
         var webhookPayload = new PaymentStatusWebhookRequestDto
@@ -75,74 +94,11 @@ public sealed class CallbacksController : ControllerBase
         try
         {
             await _paymentJourneyService.ProcessPaymentStatusWebhook(webhookPayload);
-            await SafeLog("callback.moolre.transaction", "persisted_local", "success", request: body, response: webhookPayload, provider: "moolre", reference: paymentId, paymentReference: paymentId);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to persist payment callback paymentId={PaymentId}", paymentId);
-            await SafeLog("callback.moolre.transaction", "persisted_local", "failed", request: body, response: webhookPayload, provider: "moolre", reference: paymentId, paymentReference: paymentId, errorMessage: ex.Message);
+            _logger.LogError(ex, "Failed to persist legacy payment callback paymentId={PaymentId}", paymentId);
         }
-
-        var webhookUrl = _webhookSettings.RegistrationPaymentStatusUrl?.Trim();
-        if (!string.IsNullOrWhiteSpace(webhookUrl))
-        {
-            try
-            {
-                var client = _httpClientFactory.CreateClient();
-                using var response = await client.PostAsJsonAsync(webhookUrl, webhookPayload);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var responseBody = await response.Content.ReadAsStringAsync();
-                    _logger.LogWarning(
-                        "Payment status webhook forward failed. statusCode={StatusCode} url={Url} body={Body}",
-                        (int)response.StatusCode,
-                        webhookUrl,
-                        responseBody);
-                    await SafeLog("callback.moolre.transaction", "forward_registration", "failed",
-                        request: webhookPayload,
-                        response: new { responseBody, statusCode = (int)response.StatusCode, webhookUrl },
-                        provider: "moolre",
-                        reference: paymentId,
-                        paymentReference: paymentId,
-                        errorMessage: "Registration webhook returned non-success status code");
-                }
-                else
-                {
-                    await SafeLog("callback.moolre.transaction", "forward_registration", "success",
-                        request: webhookPayload,
-                        response: new { statusCode = (int)response.StatusCode, webhookUrl },
-                        provider: "moolre",
-                        reference: paymentId,
-                        paymentReference: paymentId);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "Payment status webhook forward threw exception. url={Url} paymentId={PaymentId}",
-                    webhookUrl,
-                    paymentId);
-                await SafeLog("callback.moolre.transaction", "forward_registration", "failed",
-                    request: webhookPayload,
-                    response: new { webhookUrl },
-                    provider: "moolre",
-                    reference: paymentId,
-                    paymentReference: paymentId,
-                    errorMessage: ex.Message);
-            }
-        }
-
-        _logger.LogInformation(
-            "Processed Moolre callback externalRef={ExternalRef} providerRef={ProviderRef} fallbackProviderRef={FallbackProviderRef} state={State} amount={Amount} code={ProviderCode} message={ProviderMessage} processedAt={ProcessedAtUtc}",
-            body.Data.ExternalRef?.Trim(),
-            body.Data.ThirdPartyRef?.Trim(),
-            body.Data.TransactionId?.Trim(),
-            localState,
-            amount,
-            body.Code,
-            body.Message,
-            now);
 
         return Ok(new { status = "received" });
     }

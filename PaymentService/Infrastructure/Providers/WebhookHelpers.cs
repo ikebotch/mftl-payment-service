@@ -54,7 +54,21 @@ public static class WebhookHelpers
         var current = element;
         foreach (var part in path)
         {
-            if (!current.TryGetProperty(part, out current))
+            if (current.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var found = false;
+            foreach (var property in current.EnumerateObject())
+            {
+                if (string.Equals(property.Name, part, StringComparison.OrdinalIgnoreCase))
+                {
+                    current = property.Value;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
                 return null;
         }
 
@@ -64,6 +78,7 @@ public static class WebhookHelpers
             JsonValueKind.Number => current.GetRawText(),
             JsonValueKind.True => bool.TrueString,
             JsonValueKind.False => bool.FalseString,
+            JsonValueKind.Null => null,
             _ => current.GetRawText()
         };
     }

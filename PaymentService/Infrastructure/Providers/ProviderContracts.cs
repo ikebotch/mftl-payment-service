@@ -42,6 +42,8 @@ public sealed class WebhookParseResult
     public string? ProviderReference { get; init; }
     public string? ProviderTransactionId { get; init; }
     public PaymentStatus? Status { get; init; }
+    public decimal? Amount { get; init; }
+    public string? Currency { get; init; }
     public string? EventType { get; init; }
     public string PayloadHash { get; init; } = string.Empty;
     public JsonElement Payload { get; init; }
