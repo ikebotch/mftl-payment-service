@@ -190,6 +190,19 @@ public sealed class PaymentOrchestrator(
 
         if (webhook.Status is not null)
         {
+            var validationError = providerType == PaymentProviderType.Mollie
+                ? ValidateMollieWebhookBoundary(payment, webhook)
+                : null;
+            if (validationError is not null)
+            {
+                processedEvent.Status = WebhookProcessingStatus.Failed;
+                processedEvent.Error = validationError;
+                dbContext.ProcessedWebhookEvents.Add(processedEvent);
+                await dbContext.SaveChangesAsync(ct);
+                logger.LogWarning("Rejected Mollie webhook for payment {PaymentId}: {Error}", payment.Id, validationError);
+                return new WebhookProcessOutcome(true, false, validationError, MapPayment(payment));
+            }
+
             if (webhook.Amount.HasValue && Math.Abs(webhook.Amount.Value - payment.Amount) > 0.01m)
             {
                 logger.LogWarning("Webhook amount mismatch for payment {PaymentId}. Expected {Expected}, Got {Got}.", payment.Id, payment.Amount, webhook.Amount.Value);
@@ -230,7 +243,7 @@ public sealed class PaymentOrchestrator(
         var eventType = payment.Status switch
         {
             PaymentStatus.Succeeded => "PaymentSucceeded",
-            PaymentStatus.Failed => "PaymentFailed",
+            PaymentStatus.Failed or PaymentStatus.Cancelled => "PaymentFailed",
             _ => null
         };
 
@@ -321,6 +334,8 @@ public sealed class PaymentOrchestrator(
     {
         PaymentProviderType.Stripe => "USD",
         PaymentProviderType.Paystack => "GHS",
+        PaymentProviderType.GoCardless => "GBP",
+        PaymentProviderType.Mollie => "EUR",
         _ => "GHS"
     };
 
@@ -425,5 +440,50 @@ public sealed class PaymentOrchestrator(
     }
 
     private static bool IsTerminalCallbackStatus(PaymentStatus status) =>
-        status is PaymentStatus.Succeeded or PaymentStatus.Failed;
+        status is PaymentStatus.Succeeded or PaymentStatus.Failed or PaymentStatus.Cancelled;
+
+    private static string? ValidateMollieWebhookBoundary(PaymentRecord payment, WebhookParseResult webhook)
+    {
+        if (webhook.Amount.HasValue && ToMinorUnits(webhook.Amount.Value) != ToMinorUnits(payment.Amount))
+            return "Mollie amount mismatch.";
+
+        if (!string.IsNullOrWhiteSpace(webhook.Currency) && !string.Equals(webhook.Currency, payment.Currency, StringComparison.OrdinalIgnoreCase))
+            return "Mollie currency mismatch.";
+
+        var metadata = webhook.Payload.TryGetProperty("metadata", out var metadataElement) ? metadataElement : default;
+        if (metadata.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var tenantId = ReadMetadataString(metadata, "tenantId");
+        if (!string.IsNullOrWhiteSpace(tenantId) && (!payment.TenantId.HasValue || !Guid.TryParse(tenantId, out var parsedTenantId) || parsedTenantId != payment.TenantId.Value))
+            return "Mollie tenant mismatch.";
+
+        var contributionId = ReadMetadataString(metadata, "contributionId");
+        if (!string.IsNullOrWhiteSpace(contributionId) && (!payment.ContributionId.HasValue || !Guid.TryParse(contributionId, out var parsedContributionId) || parsedContributionId != payment.ContributionId.Value))
+            return "Mollie contribution mismatch.";
+
+        var externalReference = ReadMetadataString(metadata, "externalReference");
+        if (!string.IsNullOrWhiteSpace(externalReference) && !string.Equals(externalReference, payment.ExternalReference, StringComparison.Ordinal))
+            return "Mollie external reference mismatch.";
+
+        return null;
+    }
+
+    private static string? ReadMetadataString(JsonElement metadata, string propertyName)
+    {
+        foreach (var property in metadata.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return property.Value.ValueKind == JsonValueKind.String
+                ? property.Value.GetString()
+                : property.Value.GetRawText();
+        }
+
+        return null;
+    }
+
+    private static long ToMinorUnits(decimal amount) =>
+        decimal.ToInt64(decimal.Round(amount * 100m, 0, MidpointRounding.AwayFromZero));
 }

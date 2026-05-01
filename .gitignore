@@ -5,3 +5,7 @@ obj/
 riderModule.iml
 /_ReSharper.Caches/
 PaymentService/appsettings.Development.json
+appconfig
+appconfig.json
+appconfig.*.json
+PaymentService/appsettings.json
