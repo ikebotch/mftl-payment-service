@@ -12,14 +12,26 @@ public sealed class LegacyMoolrePaymentProvider(IMoolreProvider provider) : IPay
 
     public async Task<CreatePaymentResult> CreatePaymentAsync(CreateProviderPaymentRequest request, CancellationToken ct)
     {
+        var metadata = request.Metadata.ValueKind == JsonValueKind.Object ? request.Metadata.Value : default;
+        var network = "moolre";
+        var phoneNumber = request.CustomerPhone ?? string.Empty;
+
+        if (metadata.ValueKind == JsonValueKind.Object)
+        {
+            if (metadata.TryGetProperty("momoNetwork", out var n) && n.ValueKind == JsonValueKind.String)
+                network = n.GetString() ?? network;
+            if (metadata.TryGetProperty("momoPhoneNumber", out var p) && p.ValueKind == JsonValueKind.String)
+                phoneNumber = p.GetString() ?? phoneNumber;
+        }
+
         var response = await provider.InitiateCollection(new InitiateCollectionRequestDto
         {
             Amount = request.Amount,
             Currency = request.Currency,
-            PhoneNumber = request.CustomerPhone ?? string.Empty,
+            PhoneNumber = phoneNumber,
             Reference = request.ExternalReference,
             UserReference = request.ExternalReference,
-            Network = "moolre"
+            Network = network
         });
 
         return new CreatePaymentResult
