@@ -9,9 +9,9 @@ namespace MftlPaymentService.Controllers.v1;
 
 [ApiController]
 [Route("api/v1")]
-[InternalAuth]
 public sealed class PaymentProcessingController(IPaymentOrchestrator orchestrator, ILogger<PaymentProcessingController> logger) : ControllerBase
 {
+    [InternalAuth]
     [HttpPost("payments")]
     public async Task<ActionResult<CreatePaymentResponseDto>> CreatePayment([FromBody] CreatePaymentRequestDto request, CancellationToken ct)
     {
@@ -30,6 +30,7 @@ public sealed class PaymentProcessingController(IPaymentOrchestrator orchestrato
         }
     }
 
+    [InternalAuth]
     [HttpGet("payments/{id:guid}")]
     public async Task<ActionResult<PaymentDto>> GetPayment(Guid id, CancellationToken ct)
     {
@@ -37,6 +38,7 @@ public sealed class PaymentProcessingController(IPaymentOrchestrator orchestrato
         return payment is null ? NotFound(new { message = $"Payment {id} was not found." }) : Ok(payment);
     }
 
+    [InternalAuth]
     [HttpGet("payments/reference/{externalReference}")]
     public async Task<ActionResult<PaymentDto>> GetByReference(string externalReference, CancellationToken ct)
     {
@@ -44,6 +46,7 @@ public sealed class PaymentProcessingController(IPaymentOrchestrator orchestrato
         return payment is null ? NotFound(new { message = $"Payment with externalReference {externalReference} was not found." }) : Ok(payment);
     }
 
+    [InternalAuth]
     [HttpPost("payments/{id:guid}/verify")]
     public async Task<ActionResult<PaymentDto>> Verify(Guid id, CancellationToken ct)
     {
@@ -61,6 +64,7 @@ public sealed class PaymentProcessingController(IPaymentOrchestrator orchestrato
         }
     }
 
+    [InternalAuth]
     [HttpPost("payments/{id:guid}/refund")]
     public async Task<ActionResult<PaymentDto>> Refund(Guid id, [FromBody] RefundPaymentRequestDto request, CancellationToken ct)
     {

@@ -23,6 +23,8 @@ public sealed class PaymentOrchestrator(
 
     public async Task<CreatePaymentResponseDto> CreatePaymentAsync(CreatePaymentRequestDto request, CancellationToken ct)
     {
+        logger.LogInformation("[DEBUG] PaymentOrchestrator: Received CreatePayment request for ClientApp={ClientApp}, ExternalReference={Reference}, ContributionId={ContributionId}", 
+            request.ClientApp, request.ExternalReference, request.ContributionId);
         ValidateCreateRequest(request);
 
         var existing = await dbContext.PaymentRecords
@@ -30,7 +32,10 @@ public sealed class PaymentOrchestrator(
             .FirstOrDefaultAsync(x => x.ClientApp == request.ClientApp && x.ExternalReference == request.ExternalReference, ct);
 
         if (existing is not null)
+        {
+            logger.LogInformation("[DEBUG] PaymentOrchestrator: Found existing payment record {PaymentId} for ExternalReference={Reference}. Returning existing.", existing.Id, request.ExternalReference);
             return MapCreateResponse(existing);
+        }
 
         var payment = new PaymentRecord
         {
@@ -76,7 +81,7 @@ public sealed class PaymentOrchestrator(
         dbContext.PaymentRecords.Add(payment);
         await dbContext.SaveChangesAsync(ct);
 
-        logger.LogInformation("Created payment {PaymentId} for {ClientApp} via {Provider}", payment.Id, payment.ClientApp, payment.Provider);
+        logger.LogInformation("[DEBUG] PaymentOrchestrator: Created NEW payment {PaymentId} for {ClientApp} via {Provider}. ContributionId={ContributionId}", payment.Id, payment.ClientApp, payment.Provider, payment.ContributionId);
         return MapCreateResponse(payment);
     }
 

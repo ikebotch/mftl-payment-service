@@ -24,7 +24,8 @@ public sealed class InternalAuthAttribute : Attribute, IAsyncResourceFilter
 
         if (string.IsNullOrEmpty(timestampHeader) || string.IsNullOrEmpty(signatureHeader) || string.IsNullOrEmpty(clientAppHeader))
         {
-            logger.LogWarning("Rejecting internal request: missing security headers.");
+            logger.LogWarning("Rejecting internal request: missing security headers. ClientApp={ClientApp}, Timestamp={Timestamp}, Signature={Signature}", 
+                clientAppHeader ?? "MISSING", timestampHeader ?? "MISSING", signatureHeader ?? "MISSING");
             context.Result = new ObjectResult(new { message = "Missing security headers." }) { StatusCode = 403 };
             return;
         }
@@ -46,7 +47,8 @@ public sealed class InternalAuthAttribute : Attribute, IAsyncResourceFilter
 
         if (!options.Apps.TryGetValue(clientAppHeader, out var appRegistration) || string.IsNullOrEmpty(appRegistration.SharedSecret))
         {
-            logger.LogWarning("Rejecting internal request: unknown or misconfigured client app {ClientApp}.", clientAppHeader);
+            logger.LogWarning("Rejecting internal request: unknown or misconfigured client app {ClientApp}. Available apps: {AvailableApps}", 
+                clientAppHeader, string.Join(", ", options.Apps.Keys));
             context.Result = new ObjectResult(new { message = "Unknown client app." }) { StatusCode = 403 };
             return;
         }
@@ -58,7 +60,9 @@ public sealed class InternalAuthAttribute : Attribute, IAsyncResourceFilter
 
         if (!VerifySignature(appRegistration.SharedSecret, timestampHeader, body, signatureHeader))
         {
-            logger.LogWarning("Rejecting internal request: invalid signature for client app {ClientApp}.", clientAppHeader);
+            var computed = WebhookHelpers.ComputeHmacSha256Hex(appRegistration.SharedSecret, $"{timestampHeader}.{body}");
+            logger.LogWarning("Rejecting internal request: invalid signature for client app {ClientApp}. Expected={Expected}, Computed={Computed}", 
+                clientAppHeader, signatureHeader, computed);
             context.Result = new ObjectResult(new { message = "Invalid signature." }) { StatusCode = 403 };
             return;
         }

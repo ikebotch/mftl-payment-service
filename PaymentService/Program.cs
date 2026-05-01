@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using MftlPaymentService.Data;
 using MftlPaymentService.Infrastructure.Callbacks;
 using MftlPaymentService.Infrastructure.Providers;
@@ -82,6 +83,14 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
     app.MapScalarApiReference();
+}
+
+// Startup Diagnostics for Internal Clients
+using (var scope = app.Services.CreateScope())
+{
+    var options = scope.ServiceProvider.GetRequiredService<IOptions<ClientCallbackOptions>>().Value;
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("Internal Authentication Configured. Allowed Clients: {Clients}", string.Join(", ", options.Apps.Keys));
 }
 
 app.UseCors("AllowAll");
