@@ -77,15 +77,59 @@ public sealed class GoCardlessPaymentProviderTests
         var paymentRequest = billingRequest.RootElement.GetProperty("billing_requests").GetProperty("payment_request");
         Assert.Equal(8250, paymentRequest.GetProperty("amount").GetInt32());
         Assert.Equal("GBP", paymentRequest.GetProperty("currency").GetString());
-        Assert.Equal("COL-GC-123", paymentRequest.GetProperty("reference").GetString());
-        Assert.Equal("11111111-1111-1111-1111-111111111111", paymentRequest.GetProperty("metadata").GetProperty("tenantId").GetString());
+        Assert.False(paymentRequest.TryGetProperty("reference", out _));
+        Assert.Equal("mftl-collections", paymentRequest.GetProperty("metadata").GetProperty("clientApp").GetString());
         Assert.Equal("22222222-2222-2222-2222-222222222222", paymentRequest.GetProperty("metadata").GetProperty("contributionId").GetString());
+        Assert.Equal(3, paymentRequest.GetProperty("metadata").EnumerateObject().Count());
 
         using var flowRequest = JsonDocument.Parse(calls[1].Body);
         var flow = flowRequest.RootElement.GetProperty("billing_request_flows");
         Assert.Contains("externalReference=COL-GC-123", flow.GetProperty("redirect_uri").GetString());
         Assert.Equal("BRQ123", flow.GetProperty("links").GetProperty("billing_request").GetString());
         Assert.Equal("donor@example.test", flow.GetProperty("prefilled_customer").GetProperty("email").GetString());
+    }
+
+    [Fact]
+    public async Task CreatePaymentAsync_shortens_long_reference()
+    {
+        var calls = new List<(HttpMethod Method, string Path, string Body)>();
+        var client = TestHttpMessageHandler.Create(async (request, ct) =>
+        {
+            var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(ct);
+            calls.Add((request.Method, request.RequestUri!.AbsolutePath, body));
+
+            return request.RequestUri.AbsolutePath switch
+            {
+                "/billing_requests" => TestHttpMessageHandler.Json(HttpStatusCode.Created, """{"billing_requests": {"id": "BRQ123"}}"""),
+                "/billing_request_flows" => TestHttpMessageHandler.Json(HttpStatusCode.Created, """{"billing_request_flows": {"authorisation_url": "https://gc.com/pay"}}"""),
+                _ => TestHttpMessageHandler.Json(HttpStatusCode.NotFound, "{}")
+            };
+        });
+
+        var provider = CreateProvider(client);
+        var longRef = "REF-21127c3421ed417c91ac67b43d25ef80"; // 36 chars
+
+        var result = await provider.CreatePaymentAsync(new CreateProviderPaymentRequest
+        {
+            ClientApp = "mftl-collections",
+            ExternalReference = longRef,
+            Amount = 10.00m,
+            Currency = "GBP",
+            Metadata = JsonSerializer.SerializeToElement(new { tenantId = Guid.NewGuid() })
+        }, CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        
+        using var billingRequest = JsonDocument.Parse(calls[0].Body);
+        var paymentRequest = billingRequest.RootElement.GetProperty("billing_requests").GetProperty("payment_request");
+        Assert.False(paymentRequest.TryGetProperty("reference", out _));
+        
+        var metadata = paymentRequest.GetProperty("metadata");
+        Assert.Equal(longRef, metadata.GetProperty("externalReference").GetString());
+
+        using var flowRequest = JsonDocument.Parse(calls[1].Body);
+        var redirectUri = flowRequest.RootElement.GetProperty("billing_request_flows").GetProperty("redirect_uri").GetString();
+        Assert.Contains($"externalReference={longRef}", redirectUri);
     }
 
     [Fact]

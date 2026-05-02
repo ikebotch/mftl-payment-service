@@ -45,7 +45,7 @@ public class MoolreProvider : IMoolreProvider
         _restClient = new RestClient(baseUrl ?? string.Empty);
         
         // Secure diagnostic log of config
-        _logger.LogInformation("Moolre Provider Initialized. BaseUrl={BaseUrl}, X-Api-User={User}, X-Api-Key={Key}",
+        _logger.LogInformation("Moolre Provider Initialized. BaseUrl={BaseUrl}, X-API-USER={User}, X-API-PUBKEY={Key}",
             baseUrl,
             Sanitize(apiUser),
             Sanitize(apiKey));

@@ -8,13 +8,50 @@ using MftlPaymentService.Settings;
 
 namespace MftlPaymentService.Infrastructure.Providers;
 
-public sealed class GoCardlessPaymentProvider(
-    HttpClient httpClient,
-    IOptions<GoCardlessSettings> options,
-    ILogger<GoCardlessPaymentProvider> logger) : IPaymentProvider
+public sealed class GoCardlessPaymentProvider : IPaymentProvider
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly GoCardlessSettings _settings = options.Value;
+    private readonly GoCardlessSettings _settings;
+    private readonly HttpClient httpClient;
+    private readonly ILogger<GoCardlessPaymentProvider> logger;
+
+    public GoCardlessPaymentProvider(
+        HttpClient httpClient,
+        IOptions<GoCardlessSettings> options,
+        ILogger<GoCardlessPaymentProvider> logger)
+    {
+        this.httpClient = httpClient;
+        this.logger = logger;
+        _settings = options.Value;
+
+        var token = _settings.AccessToken ?? string.Empty;
+        var secret = _settings.WebhookSecret ?? string.Empty;
+        
+        logger.LogInformation("GoCardless Provider Initialized: " +
+            "Environment={Environment}, " +
+            "BaseUrl={BaseUrl}, " +
+            "AccessTokenPresent={TokenPresent}, " +
+            "AccessTokenPrefix={TokenPrefix}, " +
+            "WebhookUrl={WebhookUrl}, " +
+            "RedirectBaseUrl={RedirectUrl}, " +
+            "WebhookSecretPresent={SecretPresent}",
+            _settings.Environment,
+            _settings.BaseUrl,
+            !string.IsNullOrWhiteSpace(token),
+            token.Length > 5 ? token[..5] : "none",
+            _settings.WebhookPath,
+            _settings.RedirectBaseUrl,
+            !string.IsNullOrWhiteSpace(secret));
+            
+        if (_settings.Environment.Equals("Live", StringComparison.OrdinalIgnoreCase) && token.StartsWith("sandbox_"))
+        {
+            logger.LogWarning("CRITICAL: GoCardless environment is LIVE but token is SANDBOX! Requests will fail.");
+        }
+        else if (_settings.Environment.Equals("Sandbox", StringComparison.OrdinalIgnoreCase) && token.StartsWith("live_"))
+        {
+            logger.LogWarning("CRITICAL: GoCardless environment is SANDBOX but token is LIVE! Requests will fail.");
+        }
+    }
 
     public PaymentProviderType Provider => PaymentProviderType.GoCardless;
 
@@ -152,11 +189,16 @@ public sealed class GoCardlessPaymentProvider(
                     description = BuildDescription(request),
                     amount = ConvertToMinorUnits(request.Amount),
                     currency,
-                    reference = request.ExternalReference,
+                    // Note: Custom reference is omitted because our GoCardless flow/account 
+                    // does not currently support 'direct funds settlements' which is required for custom references.
                     metadata = BuildMetadata(request)
                 }
             }
         };
+
+        logger.LogInformation("GoCardless Billing Request: CustomReference=OMITTED, MetadataCount={Count}, Keys={Keys}", 
+            payload.billing_requests.payment_request.metadata.Count, 
+            string.Join(", ", payload.billing_requests.payment_request.metadata.Keys));
 
         using var httpRequest = CreateRequest(HttpMethod.Post, "/billing_requests");
         httpRequest.Content = JsonContent.Create(payload, options: JsonOptions);
@@ -178,6 +220,25 @@ public sealed class GoCardlessPaymentProvider(
             ProviderReference = WebhookHelpers.ReadString(billingRequest, "id"),
             ProviderTransactionId = WebhookHelpers.ReadString(billingRequest, "links", "payment")
         };
+    }
+
+    private static string GenerateShortReference(string externalReference)
+    {
+        if (string.IsNullOrWhiteSpace(externalReference))
+            return "GC-UNKNOWN";
+
+        if (externalReference.Length <= 18)
+            return externalReference;
+
+        // Use GC- prefix plus first 15 chars of a hash or the reference itself if it's alphanumeric
+        // To keep it deterministic and simple, we'll take the first 15 chars after the prefix
+        // GoCardless allows alphanumeric, - and _
+        var clean = new string(externalReference.Where(char.IsLetterOrDigit).ToArray());
+        if (clean.Length < 15)
+            clean = externalReference.Replace("-", "").Replace("_", "");
+
+        var result = $"GC-{Truncate(clean, 15)}";
+        return result.Length > 18 ? result[..18] : result;
     }
 
     private async Task<CreatePaymentResult> CreateBillingRequestFlowAsync(string billingRequestId, CreateProviderPaymentRequest paymentRequest, CancellationToken ct)
@@ -251,22 +312,24 @@ public sealed class GoCardlessPaymentProvider(
     {
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["externalReference"] = request.ExternalReference
+            ["externalReference"] = Truncate(request.ExternalReference, 50),
+            ["contributionId"] = Truncate(request.Metadata.TryGetProperty("contributionId", out var ci) ? (ci.ValueKind == JsonValueKind.String ? ci.GetString() : ci.GetRawText()) : "none", 50),
+            ["clientApp"] = Truncate(request.ClientApp, 50)
         };
 
-        AddMetadataValue(metadata, "tenantId", request.Metadata);
-        AddMetadataValue(metadata, "contributionId", request.Metadata);
+        // GoCardless enforces a strict limit of 3 metadata properties on billing requests
         return metadata;
     }
 
     private static void AddMetadataValue(Dictionary<string, string> metadata, string key, JsonElement source)
     {
+        // No longer used for GoCardless due to strict 3-key limit, but kept for logic consistency if needed elsewhere
         if (metadata.Count >= 3 || source.ValueKind != JsonValueKind.Object || !source.TryGetProperty(key, out var value))
             return;
 
         var raw = value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText();
         if (!string.IsNullOrWhiteSpace(raw))
-            metadata[key] = raw;
+            metadata[key] = Truncate(raw, 50);
     }
 
     private static string BuildDescription(CreateProviderPaymentRequest request)
