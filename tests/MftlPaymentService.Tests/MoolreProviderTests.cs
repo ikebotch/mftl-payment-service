@@ -26,7 +26,7 @@ public class MoolreProviderTests
         {
             Amount = 10,
             Currency = "GHS",
-            PhoneNumber = "0244123456",
+            PhoneNumber = "0244199324",
             Reference = "REF-123",
             UserReference = "USER-123",
             Network = "mtn"
@@ -73,5 +73,49 @@ public class MoolreProviderTests
         // Act & Assert
         var ex = Assert.Throws<InvalidOperationException>(() => new MoolreProvider(options, _loggerMock.Object));
         Assert.Contains("not localhost", ex.Message);
+    }
+
+    [Fact]
+    public void Constructor_Should_Throw_If_Real_Mode_Missing_WebhookSecret()
+    {
+        // Arrange
+        var options = Options.Create(new MoolreSettings
+        {
+            Mode = "Real",
+            BaseUrl = "https://api.moolre.com",
+            ApiKey = "key",
+            ApiUser = "user",
+            CallbackUrl = "https://ngrok.io/callback"
+        });
+
+        // Act & Assert
+        var ex = Assert.Throws<InvalidOperationException>(() => new MoolreProvider(options, _loggerMock.Object));
+        Assert.Contains("WebhookSecret", ex.Message);
+    }
+    [Fact]
+    public void Constructor_Should_Trim_Credentials()
+    {
+        // Arrange
+        var options = Options.Create(new MoolreSettings
+        {
+            Mode = "Real",
+            BaseUrl = " https://api.moolre.com ",
+            ApiKey = " key-123 ",
+            ApiUser = " user-123 ",
+            CallbackUrl = " https://ngrok.io/callback ",
+            WebhookSecret = " secret "
+        });
+
+        // Act
+        var provider = new MoolreProvider(options, _loggerMock.Object);
+
+        // Assert
+        var logs = _loggerMock.Invocations
+            .Select(i => i.Arguments[2]?.ToString())
+            .ToList();
+        
+        Assert.Contains(logs, l => l!.Contains("BaseUrl=https://api.moolre.com"));
+        Assert.Contains(logs, l => l!.Contains("X-API-USER=use...123 (8 chars)"));
+        Assert.Contains(logs, l => l!.Contains("X-API-PUBKEY=key...123 (7 chars)"));
     }
 }

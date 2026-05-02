@@ -28,7 +28,8 @@ public sealed class CallbacksController : ControllerBase
         IPaymentJourneyService paymentJourneyService,
         IPaymentOrchestrator orchestrator,
         IActivityLogService activityLogService,
-        IOptions<PaymentWebhookSettings> webhookOptions)
+        IOptions<PaymentWebhookSettings> webhookOptions,
+        MftlPaymentService.Providers.v1.IMoolreProvider moolreProvider)
     {
         _logger = logger;
         _httpClientFactory = httpClientFactory;
@@ -36,6 +37,25 @@ public sealed class CallbacksController : ControllerBase
         _orchestrator = orchestrator;
         _activityLogService = activityLogService;
         _webhookSettings = webhookOptions.Value;
+        _moolreProvider = moolreProvider;
+    }
+
+    private readonly MftlPaymentService.Providers.v1.IMoolreProvider _moolreProvider;
+
+    [HttpGet("moolre/diag-test")]
+    public async Task<IActionResult> DiagTestMoolre(string? phone)
+    {
+        _logger.LogInformation("Manually triggering Moolre diagnostic test.");
+        var result = await _moolreProvider.InitiateCollection(new MftlPaymentService.Dtos.v1.Request.MobileMoney.InitiateCollectionRequestDto
+        {
+            Amount = 1.00m,
+            Currency = "GHS",
+            PhoneNumber = phone ?? "0244199324",
+            Reference = $"DIAG-{Guid.NewGuid():N}",
+            Network = "mtn"
+        });
+
+        return Ok(result);
     }
 
     [HttpPost("moolre")]

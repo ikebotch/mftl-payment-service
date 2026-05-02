@@ -5,6 +5,8 @@ using MftlPaymentService.Infrastructure.Providers;
 using MftlPaymentService.Interfaces.v1;
 using MftlPaymentService.Models.v1;
 using MftlPaymentService.Providers.v1;
+using Microsoft.Extensions.Options;
+using MftlPaymentService.Settings;
 
 namespace MftlPaymentService.Tests;
 
@@ -13,7 +15,8 @@ public sealed class LegacyMoolrePaymentProviderTests
     [Fact]
     public async Task CreatePaymentAsync_preserves_existing_behaviour()
     {
-        var provider = new LegacyMoolrePaymentProvider(new StubMoolreProvider());
+        var options = Options.Create(new MoolreSettings { Mode = "Mock" });
+        var provider = new LegacyMoolrePaymentProvider(new StubMoolreProvider(), options);
 
         var result = await provider.CreatePaymentAsync(new CreateProviderPaymentRequest
         {

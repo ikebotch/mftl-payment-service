@@ -93,8 +93,13 @@ using (var scope = app.Services.CreateScope())
     logger.LogInformation("Internal Authentication Configured. Allowed Clients: {Clients}", string.Join(", ", options.Apps.Keys));
 
     var moolreOptions = scope.ServiceProvider.GetRequiredService<IOptions<MoolreSettings>>().Value;
-    logger.LogInformation("Moolre Configuration: Mode={Mode}, BaseUrl={Url}, CallbackUrl={CallbackUrl}, CredentialsPresent={Creds}", 
-        moolreOptions.Mode, moolreOptions.BaseUrl, moolreOptions.CallbackUrl, !string.IsNullOrEmpty(moolreOptions.ApiKey));
+    logger.LogInformation("Moolre Configuration: Mode={Mode}, BaseUrl={Url}, CallbackUrl={CallbackUrl}, ApiUser={UserLen} chars, ApiKey={KeyLen} chars, WebhookSecret={SecretLen} chars", 
+        moolreOptions.Mode, 
+        moolreOptions.BaseUrl, 
+        moolreOptions.CallbackUrl, 
+        (moolreOptions.ApiUser?.Trim().Length ?? 0), 
+        (moolreOptions.ApiKey?.Trim().Length ?? 0), 
+        (moolreOptions.WebhookSecret?.Trim().Length ?? 0));
 }
 
 app.UseCors("AllowAll");

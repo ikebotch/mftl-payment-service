@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using Newtonsoft.Json;
 using MftlPaymentService.Dtos.v1.Request.MobileMoney;
 using MftlPaymentService.Dtos.v1.Request.Moolre;
@@ -32,12 +33,29 @@ public class MoolreProvider : IMoolreProvider
                 throw new InvalidOperationException("Real Moolre requires a public callback URL.");
             if (settings.CallbackUrl.Contains("localhost") || settings.CallbackUrl.Contains("127.0.0.1"))
                 throw new InvalidOperationException("Real Moolre requires a public callback URL, not localhost.");
+            if (string.IsNullOrWhiteSpace(settings.WebhookSecret))
+                throw new InvalidOperationException("Real Moolre requires a WebhookSecret for secure callback verification.");
         }
 
         // configure rest client
-        _restClient = new RestClient(_settings.Value.BaseUrl);
-        _restClient.AddDefaultHeader("X-Api-Key", _settings.Value.ApiKey);
-        _restClient.AddDefaultHeader("X-Api-User", _settings.Value.ApiUser);
+        var baseUrl = _settings.Value.BaseUrl?.Trim();
+        var apiKey = _settings.Value.ApiKey?.Trim();
+        var apiUser = _settings.Value.ApiUser?.Trim();
+
+        _restClient = new RestClient(baseUrl ?? string.Empty);
+        
+        // Secure diagnostic log of config
+        _logger.LogInformation("Moolre Provider Initialized. BaseUrl={BaseUrl}, X-Api-User={User}, X-Api-Key={Key}",
+            baseUrl,
+            Sanitize(apiUser),
+            Sanitize(apiKey));
+    }
+
+    private static string Sanitize(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return "(null)";
+        if (value.Length <= 6) return new string('*', value.Length);
+        return $"{value[..3]}...{value[^3..]} ({value.Length} chars)";
     }
 
     public async Task<ServiceResponseModel<InitiateCollectionResponseDto>> InitiateCollection(
@@ -50,21 +68,20 @@ public class MoolreProvider : IMoolreProvider
             // create 
             var payload = new MoolreInitiateCollectionRequestDto
             {
-                Amount = body.Amount,
-                Payer = body.PhoneNumber,
+                Type = 1,
                 Channel = ParseCollectionChannel(body.Network),
                 Currency = body.Currency,
+                Payer = body.PhoneNumber,
+                Amount = body.Amount,
                 ExtReference = body.Reference,
                 Reference = body.UserReference,
-                Type = 1,
                 AccountNumber = _settings.Value.PaymentAccountNumber,
-                Username = _settings.Value.ApiUser,
-                CallbackUrl = _settings.Value.CallbackUrl
+                Username = _settings.Value.ApiUser
             };
 
             // log request
-            _logger.LogInformation("InitiateCollection Request: Mode={Mode}, Url={Url}, ExternalReference={ExtReference}, ContributionId={ContributionId}, Amount={Amount} {Currency}, CallbackUrl={CallbackUrl}",
-                _settings.Value.Mode, _settings.Value.BaseUrl, payload.ExtReference, payload.Reference, payload.Amount, payload.Currency, payload.CallbackUrl);
+            _logger.LogInformation("InitiateCollection Request: Mode={Mode}, Url={Url}, ExternalReference={ExtReference}, Amount={Amount} {Currency}, CallbackUrl={CallbackUrl}",
+                _settings.Value.Mode, _settings.Value.BaseUrl, payload.ExtReference, payload.Amount, payload.Currency, _settings.Value.CallbackUrl);
 
             if (!isReal)
             {
@@ -73,17 +90,42 @@ public class MoolreProvider : IMoolreProvider
                 return new ServiceResponseModel<InitiateCollectionResponseDto>
                 {
                     Status = "success",
-                    Message = "Initiate collection was successful (MOCKED)",
-                    Data = new InitiateCollectionResponseDto
-                    {
-                        Reference = $"MOCK-{Guid.NewGuid():N}"
-                    }
+                    Message = "MOCK SUCCESS",
+                    Data = new InitiateCollectionResponseDto { Reference = $"MOCK-{Guid.NewGuid():N}" }
                 };
             }
 
-            // create a request
-            var request = new RestRequest("/open/transact/topup");
+            var request = new RestRequest("/open/transact/topup", Method.Post);
             request.AddJsonBody(payload);
+
+
+            var apiKey = _settings.Value.ApiKey?.Trim();
+            var apiUser = _settings.Value.ApiUser?.Trim();
+            var baseUrl = _settings.Value.BaseUrl?.Trim();
+
+            // Add headers explicitly to request
+            request.AddHeader("X-Api-Key", apiKey ?? string.Empty);
+            request.AddHeader("X-Api-User", apiUser ?? string.Empty);
+            request.AddHeader("Content-Type", "application/json");
+
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+            var jsonBody = System.Text.Json.JsonSerializer.Serialize(payload, jsonOptions);
+            
+            _logger.LogInformation("Moolre Real Request: URL={Url}, Headers=[X-Api-User:{User}, X-Api-Key:{Key}], Body={Body}",
+                $"{baseUrl}/open/transact/topup",
+                apiUser,
+                Sanitize(apiKey),
+                jsonBody);
+
+            _logger.LogInformation("Moolre CURL: curl -X POST \"{BaseUrl}/open/transact/topup\" " +
+                "-H \"Content-Type: application/json\" " +
+                "-H \"X-Api-User: {User}\" " +
+                "-H \"X-Api-Key: {Key}\" " +
+                "-d '{Body}'",
+                baseUrl, 
+                apiUser, 
+                "MASKED-KEY", 
+                jsonBody.Replace("'", "'\\''"));
 
             // make request
             var response = await _restClient.PostAsync<MoolreServiceResponse>(request);
@@ -106,7 +148,7 @@ public class MoolreProvider : IMoolreProvider
                 return new ServiceResponseModel<InitiateCollectionResponseDto>
                 {
                     Status = "failed",
-                    Message = response.Message
+                    Message = response.Message ?? $"Moolre error code: {response.Code}"
                 };
             }
 
@@ -156,8 +198,17 @@ public class MoolreProvider : IMoolreProvider
             };
             request.AddJsonBody(payload);
 
+            // Add headers explicitly
+            request.AddHeader("X-Api-Key", _settings.Value.ApiKey?.Trim() ?? string.Empty);
+            request.AddHeader("X-Api-User", _settings.Value.ApiUser?.Trim() ?? string.Empty);
+            request.AddHeader("Content-Type", "application/json");
+
             // log request
-            _logger.LogInformation($"CompleteCollection Request Payload: {JsonConvert.SerializeObject(payload)}");
+            _logger.LogInformation("CompleteCollection Request: URL={Url}, Headers=[X-Api-User:{User}, X-Api-Key:{Key}], Body={Body}",
+                $"{_settings.Value.BaseUrl}/open/transact/topup",
+                _settings.Value.ApiUser,
+                Sanitize(_settings.Value.ApiKey),
+                JsonConvert.SerializeObject(payload));
 
             // make request
             var response = await _restClient.PostAsync<MoolreServiceResponse>(request);
@@ -241,19 +292,32 @@ public class MoolreProvider : IMoolreProvider
         try
         {
             // create a request
-            var request = new RestRequest("/open/transact/status");
+            var request = new RestRequest("/open/transact/status", Method.Post);
 
             var payload = new MoolreCheckPaymentStatusRequestDto
             {
                 Type = 1,
-                IdType = 2,
+                IdType = 2, // 2 for External Reference
                 Id = reference,
                 AccountNumber = _settings.Value.PaymentAccountNumber
             };
             request.AddJsonBody(payload);
 
-            // log request
-            _logger.LogInformation($"CheckPaymentStatus Request Payload: {JsonConvert.SerializeObject(payload)}");
+            // Ensure headers are set on the request explicitly
+            request.AddHeader("X-Api-Key", _settings.Value.ApiKey?.Trim() ?? string.Empty);
+            request.AddHeader("X-Api-User", _settings.Value.ApiUser?.Trim() ?? string.Empty);
+            request.AddHeader("Content-Type", "application/json");
+
+            _logger.LogInformation("CheckPaymentStatus Request: URL={Url}, Headers=[X-Api-User:{User}, X-Api-Key:{Key}], Body={Body}",
+                $"{_settings.Value.BaseUrl}/open/transact/status",
+                _settings.Value.ApiUser,
+                Sanitize(_settings.Value.ApiKey),
+                JsonConvert.SerializeObject(payload));
+            request.AddHeader("Content-Type", "application/json");
+
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+            var jsonBody = System.Text.Json.JsonSerializer.Serialize(payload, jsonOptions);
+            _logger.LogInformation("Moolre Status Outbound Body: {Body}", jsonBody);
 
             // make request
             var response =
@@ -528,7 +592,7 @@ public class MoolreProvider : IMoolreProvider
     {
         string channel;
 
-        switch (network)
+        switch (network?.ToLowerInvariant())
         {
             case "mtn":
                 channel = "1";
@@ -558,7 +622,7 @@ public class MoolreProvider : IMoolreProvider
     {
         string channel;
 
-        switch (network)
+        switch (network?.ToLowerInvariant())
         {
             case "mtn":
                 channel = "13";

@@ -9,15 +9,20 @@ using MftlPaymentService.Providers.v1;
 using MftlPaymentService.Interfaces.v1;
 using MftlPaymentService.Models.v1;
 using MftlPaymentService.Dtos.v1.Response.MobileMoney;
+using MftlPaymentService.Settings;
+using Microsoft.Extensions.Options;
 
 namespace MftlPaymentService.Tests;
 
 public sealed class MoolreWebhookTests
 {
+    private static IOptions<MoolreSettings> CreateOptions(string mode = "Mock", string secret = "") =>
+        Options.Create(new MoolreSettings { Mode = mode, WebhookSecret = secret });
+
     [Fact]
     public async Task ParseWebhookAsync_maps_txstatus_1_to_Succeeded()
     {
-        var provider = new LegacyMoolrePaymentProvider(Mock.Of<IMoolreProvider>());
+        var provider = new LegacyMoolrePaymentProvider(Mock.Of<IMoolreProvider>(), CreateOptions());
         var json = @"{
             ""data"": {
                 ""externalref"": ""REF-123"",
@@ -37,14 +42,16 @@ public sealed class MoolreWebhookTests
     }
 
     [Fact]
-    public async Task ParseWebhookAsync_maps_code_P01_to_Succeeded()
+    public async Task ParseWebhookAsync_maps_txstatus_1_to_Succeeded_official()
     {
-        var provider = new LegacyMoolrePaymentProvider(Mock.Of<IMoolreProvider>());
+        var provider = new LegacyMoolrePaymentProvider(Mock.Of<IMoolreProvider>(), CreateOptions());
         var json = @"{
-            ""code"": ""P01"",
+            ""status"": 1,
+            ""code"": ""TR099"",
             ""data"": {
                 ""externalref"": ""REF-123"",
-                ""txstatus"": ""pending""
+                ""txstatus"": ""1"",
+                ""transactionid"": ""TX-MOCK-1""
             }
         }";
         var request = TestFactory.CreateJsonRequest(json);
@@ -59,7 +66,7 @@ public sealed class MoolreWebhookTests
     {
         await using var db = TestFactory.CreateDbContext();
         var moolreStub = new Mock<IMoolreProvider>();
-        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object);
+        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object, CreateOptions());
         var dispatcher = new RecordingCallbackDispatcher();
         var orchestrator = TestFactory.CreateOrchestrator(db, dispatcher, provider);
 
@@ -108,7 +115,7 @@ public sealed class MoolreWebhookTests
     {
         await using var db = TestFactory.CreateDbContext();
         var moolreStub = new Mock<IMoolreProvider>();
-        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object);
+        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object, CreateOptions());
         var dispatcher = new RecordingCallbackDispatcher();
         var orchestrator = TestFactory.CreateOrchestrator(db, dispatcher, provider);
 
@@ -148,7 +155,7 @@ public sealed class MoolreWebhookTests
     {
         await using var db = TestFactory.CreateDbContext();
         var moolreStub = new Mock<IMoolreProvider>();
-        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object);
+        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object, CreateOptions());
         var dispatcher = new RecordingCallbackDispatcher();
         var orchestrator = TestFactory.CreateOrchestrator(db, dispatcher, provider);
 
@@ -174,7 +181,7 @@ public sealed class MoolreWebhookTests
     {
         await using var db = TestFactory.CreateDbContext();
         var moolreStub = new Mock<IMoolreProvider>();
-        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object);
+        var provider = new LegacyMoolrePaymentProvider(moolreStub.Object, CreateOptions());
         var dispatcher = new RecordingCallbackDispatcher();
         var orchestrator = TestFactory.CreateOrchestrator(db, dispatcher, provider);
 
@@ -208,5 +215,24 @@ public sealed class MoolreWebhookTests
         
         var delivery = db.ClientCallbackDeliveries.Single();
         Assert.Equal("PaymentFailed", delivery.EventType);
+    }
+
+    [Fact]
+    public async Task ParseWebhookAsync_fails_when_secret_mismatch_in_Real_mode()
+    {
+        var provider = new LegacyMoolrePaymentProvider(Mock.Of<IMoolreProvider>(), CreateOptions("Real", "correct-secret"));
+        var json = @"{
+            ""data"": {
+                ""externalref"": ""REF-123"",
+                ""secret"": ""wrong-secret"",
+                ""txstatus"": ""1""
+            }
+        }";
+        var request = TestFactory.CreateJsonRequest(json);
+
+        var result = await provider.ParseWebhookAsync(request.Request, CancellationToken.None);
+
+        Assert.False(result.SignatureValid);
+        Assert.Equal("Invalid Moolre webhook secret.", result.FailureReason);
     }
 }
