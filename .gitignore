@@ -35,6 +35,13 @@ appsettings.*.local.json
 logs/
 scratch/
 
+# IDE and OS-specific files
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
 # Build outputs
 bin/
 obj/
