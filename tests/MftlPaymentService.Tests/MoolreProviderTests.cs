@@ -118,4 +118,35 @@ public class MoolreProviderTests
         Assert.Contains(logs, l => l!.Contains("X-API-USER=use...123 (8 chars)"));
         Assert.Contains(logs, l => l!.Contains("X-API-PUBKEY=key...123 (7 chars)"));
     }
+
+    [Theory]
+    [InlineData("+2330244199324", "0244199324")]
+    [InlineData("+233244199324", "0244199324")]
+    [InlineData("233244199324", "0244199324")]
+    [InlineData("0244199324", "0244199324")]
+    [InlineData("244199324", "0244199324")]
+    [InlineData(" 024-419 9324 ", "0244199324")]
+    public void NormalizeGhanaPhone_Should_Correctly_Normalize_Valid_Inputs(string input, string expected)
+    {
+        // Act
+        var result = MoolreProvider.NormalizeGhanaPhone(input);
+
+        // Assert
+        Assert.Equal(expected, result);
+    }
+
+    [Theory]
+    [InlineData("24419932")] // Too short
+    [InlineData("02441993244")] // Too long
+    [InlineData("Botchway")] // Alpha
+    [InlineData("")] // Empty
+    [InlineData(null)] // Null
+    public void NormalizeGhanaPhone_Should_Return_Empty_For_Invalid_Inputs(string? input)
+    {
+        // Act
+        var result = MoolreProvider.NormalizeGhanaPhone(input!);
+
+        // Assert
+        Assert.Equal(string.Empty, result);
+    }
 }

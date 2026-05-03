@@ -58,6 +58,46 @@ public class MoolreProvider : IMoolreProvider
         return $"{value[..3]}...{value[^3..]} ({value.Length} chars)";
     }
 
+    public static string NormalizeGhanaPhone(string phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return string.Empty;
+
+        // 1. Remove all non-digits (spaces, hyphens, brackets, etc.)
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+
+        // 2. Handle prefixes: +2330, 2330, +233, 233
+        if (digits.StartsWith("233"))
+        {
+            digits = digits[3..];
+        }
+
+        // 3. Ensure local format (starting with 0)
+        if (digits.StartsWith("0"))
+        {
+            // Already starts with 0
+        }
+        else if (digits.Length == 9)
+        {
+            // If it's 9 digits (e.g. 244199324), add the leading 0
+            digits = "0" + digits;
+        }
+
+        // 4. Final validation: must be exactly 10 digits starting with 0
+        if (digits.Length == 10 && digits.StartsWith("0"))
+        {
+            return digits;
+        }
+
+        return string.Empty; // Invalid
+    }
+
+    private static string MaskPhone(string? phone)
+    {
+        if (string.IsNullOrEmpty(phone)) return "(null)";
+        if (phone.Length < 7) return "****";
+        return $"{phone[..3]}****{phone[^3..]}";
+    }
+
     public async Task<ServiceResponseModel<InitiateCollectionResponseDto>> InitiateCollection(
         InitiateCollectionRequestDto body)
     {
@@ -65,13 +105,31 @@ public class MoolreProvider : IMoolreProvider
         {
             var isReal = string.Equals(_settings.Value.Mode, "Real", StringComparison.OrdinalIgnoreCase);
 
+            // Normalization
+            var normalizedPhone = NormalizeGhanaPhone(body.PhoneNumber);
+            var isPhoneValid = !string.IsNullOrEmpty(normalizedPhone);
+
+            _logger.LogInformation("InitiateCollection Normalization: RawPhonePresent={RawPresent}, NormalizedPhone={MaskedNormalized}, Valid={IsValid}",
+                !string.IsNullOrWhiteSpace(body.PhoneNumber),
+                MaskPhone(normalizedPhone),
+                isPhoneValid);
+
+            if (!isPhoneValid)
+            {
+                return new ServiceResponseModel<InitiateCollectionResponseDto>
+                {
+                    Status = "failed",
+                    Message = "Enter a valid Ghana mobile money number, e.g. 0244199324."
+                };
+            }
+
             // create 
             var payload = new MoolreInitiateCollectionRequestDto
             {
                 Type = 1,
                 Channel = ParseCollectionChannel(body.Network),
                 Currency = body.Currency,
-                Payer = body.PhoneNumber,
+                Payer = normalizedPhone,
                 Amount = body.Amount,
                 ExtReference = body.Reference,
                 Reference = body.UserReference,
