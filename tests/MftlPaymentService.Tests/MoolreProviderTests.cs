@@ -149,4 +149,39 @@ public class MoolreProviderTests
         // Assert
         Assert.Equal(string.Empty, result);
     }
+
+    [Fact]
+    public void MoolreInitiateCollectionRequestDto_Should_Serialize_Amount_With_Two_Decimals()
+    {
+        // Arrange
+        var dto = new MftlPaymentService.Dtos.v1.Request.Moolre.MoolreInitiateCollectionRequestDto
+        {
+            Amount = 10m,
+            Currency = "GHS"
+        };
+
+        // Act
+        var json = System.Text.Json.JsonSerializer.Serialize(dto);
+
+        // Assert
+        // We expect "amount":10.00 because of the custom converter
+        Assert.Contains("\"amount\":10.00", json);
+    }
+
+    [Fact]
+    public void MoolreInitiateCollectionRequestDto_Should_Preserve_Existing_Decimals()
+    {
+        // Arrange
+        var dto = new MftlPaymentService.Dtos.v1.Request.Moolre.MoolreInitiateCollectionRequestDto
+        {
+            Amount = 10.5m,
+            Currency = "GHS"
+        };
+
+        // Act
+        var json = System.Text.Json.JsonSerializer.Serialize(dto);
+
+        // Assert
+        Assert.Contains("\"amount\":10.50", json);
+    }
 }

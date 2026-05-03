@@ -23,6 +23,7 @@ public class MoolreInitiateCollectionRequestDto
 
     [JsonPropertyName("amount")] 
     [JsonProperty("amount")]
+    [System.Text.Json.Serialization.JsonConverter(typeof(MftlPaymentService.Infrastructure.Serialization.DecimalTwoDecimalPlacesConverter))]
     public decimal Amount { get; set; }
 
     [JsonPropertyName("externalref")] 

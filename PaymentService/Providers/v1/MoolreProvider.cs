@@ -138,7 +138,7 @@ public class MoolreProvider : IMoolreProvider
             };
 
             // log request
-            _logger.LogInformation("InitiateCollection Request: Mode={Mode}, Url={Url}, ExternalReference={ExtReference}, Amount={Amount} {Currency}, CallbackUrl={CallbackUrl}",
+            _logger.LogInformation("InitiateCollection Request: Mode={Mode}, Url={Url}, ExternalReference={ExtReference}, Amount={Amount:F2} {Currency}, CallbackUrl={CallbackUrl}",
                 _settings.Value.Mode, _settings.Value.BaseUrl, payload.ExtReference, payload.Amount, payload.Currency, _settings.Value.CallbackUrl);
 
             if (!isReal)
